@@ -15,9 +15,14 @@ export const sampleDocument: StudioDocument = {
     { id: 'fx-door', name: '木门合拢', duration: 2.2, source: 'SFX/DOOR_WOOD_11.wav', note: '带门闩声' },
     { id: 'fx-steps', name: '码头脚步', duration: 4.5, source: 'SFX/STEPS_DOCK_01.wav', note: '潮湿石地' }
   ],
+  batches: [
+    { id: 'batch-1', name: '第一批次', date: '2026-10-08', slot: '上午' },
+    { id: 'batch-2', name: '第二批次', date: '2026-10-08', slot: '下午' },
+    { id: 'batch-3', name: '第三批次', date: '2026-10-09', slot: '上午' }
+  ],
   scenes: [
     {
-      id: 'scene-1', code: 'S01', title: '雨夜来客', location: '旧港公寓 302', timeOfDay: '深夜', transition: '冷开场 · 雨声渐入', durationLimit: 150,
+      id: 'scene-1', code: 'S01', title: '雨夜来客', location: '旧港公寓 302', timeOfDay: '深夜', transition: '冷开场 · 雨声渐入', durationLimit: 150, batchId: 'batch-1',
       cues: [
         { id: 'cue-1-1', kind: 'sfx', text: '雨点落在铁皮窗檐上', emotion: '', rate: 1, soundEffectId: 'fx-rain', transition: '', manualDuration: 8 },
         { id: 'cue-1-2', kind: 'dialogue', characterId: 'char-lin', text: '顾闻？你怎么会在这个时间回来。', emotion: '警觉 / 压低音量', rate: 0.9, transition: '' },
@@ -28,7 +33,7 @@ export const sampleDocument: StudioDocument = {
       ]
     },
     {
-      id: 'scene-2', code: 'S02', title: '未接来电', location: '电话亭与码头', timeOfDay: '凌晨', transition: '平行剪辑 · 交叉叠化', durationLimit: 125,
+      id: 'scene-2', code: 'S02', title: '未接来电', location: '电话亭与码头', timeOfDay: '凌晨', transition: '平行剪辑 · 交叉叠化', durationLimit: 125, batchId: 'batch-2',
       cues: [
         { id: 'cue-2-1', kind: 'sfx', text: '码头潮水与脚步靠近', emotion: '', rate: 1, soundEffectId: 'fx-steps', transition: '', manualDuration: 6 },
         { id: 'cue-2-2', kind: 'dialogue', characterId: 'char-gu', text: '别回头。把信放在第三个电话亭里。', emotion: '冷峻 / 电话滤波', rate: 0.9, transition: '' },
@@ -38,7 +43,7 @@ export const sampleDocument: StudioDocument = {
       ]
     },
     {
-      id: 'scene-3', code: 'S03', title: '潮痕', location: '防波堤', timeOfDay: '清晨', transition: '尾声 · 留白', durationLimit: 170,
+      id: 'scene-3', code: 'S03', title: '潮痕', location: '防波堤', timeOfDay: '清晨', transition: '尾声 · 留白', durationLimit: 170, batchId: 'batch-3',
       cues: [
         { id: 'cue-3-1', kind: 'dialogue', characterId: 'char-lin', text: '信里只有一张旧船票，还有你的名字。', emotion: '疲惫 / 试探', rate: 0.9, transition: '' },
         { id: 'cue-3-2', kind: 'dialogue', characterId: 'char-gu', text: '名字是我写的，船票不是。有人想让我们同时回到这里。', emotion: '克制 / 不安', rate: 0.9, transition: '' },

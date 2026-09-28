@@ -28,6 +28,15 @@ export interface Cue {
   manualDuration?: number
 }
 
+export interface RecordingBatch {
+  id: string
+  name: string
+  /** 录制日期，格式 yyyy-MM-dd；空串表示尚未定档 */
+  date: string
+  /** 时段，例如“上午”“下午”“14:00–18:00” */
+  slot: string
+}
+
 export interface Scene {
   id: string
   code: string
@@ -37,6 +46,8 @@ export interface Scene {
   transition: string
   durationLimit: number
   cues: Cue[]
+  /** 所属录制批次；缺省表示未排期（旧数据按此打开） */
+  batchId?: string
 }
 
 export interface StudioDocument {
@@ -45,7 +56,28 @@ export interface StudioDocument {
   targetDuration: number
   characters: Character[]
   soundEffects: SoundEffect[]
+  batches: RecordingBatch[]
   scenes: Scene[]
+}
+
+export interface BatchActor {
+  actor: string
+  roles: string[]
+  sceneIds: string[]
+}
+
+export interface BatchConflict {
+  actor: string
+  batchId: string
+  sceneId: string
+  otherBatchId: string
+  otherSceneId: string
+}
+
+export interface AssignResult {
+  ok: boolean
+  conflicts?: BatchConflict[]
+  batchId?: string
 }
 
 export interface PendingChange {
@@ -75,10 +107,11 @@ export interface StudioState {
 
 export interface WarningItem {
   id: string
-  type: 'collision' | 'missing-sfx' | 'over-time'
+  type: 'collision' | 'missing-sfx' | 'over-time' | 'schedule'
   level: 'error' | 'warning'
   sceneId: string
   cueId?: string
+  otherSceneId?: string
   title: string
   detail: string
 }

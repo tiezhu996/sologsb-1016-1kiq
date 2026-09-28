@@ -4,11 +4,13 @@ import {
   NAlert,
   NButton,
   NConfigProvider,
+  NDatePicker,
   NEmpty,
   NFormItem,
   NInput,
   NInputNumber,
   NModal,
+  NPopconfirm,
   NProgress,
   NSelect,
   NSpace,
@@ -17,7 +19,7 @@ import {
   NTag
 } from 'naive-ui'
 import { useStudio } from './useStudio'
-import type { Cue, CueKind, Rate } from './types'
+import type { BatchConflict, Cue, CueKind, Rate, RecordingBatch } from './types'
 
 const studio = useStudio()
 const {
@@ -30,6 +32,10 @@ const {
   saveState,
   durationOfCue,
   durationOfScene,
+  batchActors,
+  unscheduledScenes,
+  sceneActors,
+  sceneLabel,
   updateProject,
   updateScene,
   updateCue,
@@ -39,6 +45,10 @@ const {
   deleteCue,
   moveCue,
   moveScene,
+  assignSceneBatch,
+  addBatch,
+  updateBatch,
+  deleteBatch,
   acceptChange,
   rejectChange,
   acceptAll,
@@ -54,6 +64,10 @@ const showFreezeModal = ref(false)
 const freezeName = ref('')
 const activeRightTab = ref('warnings')
 
+// 被挡住的改派 / 批次时间调整：仅展示点名信息，数据不变
+const assignBlock = ref<{ sceneId: string; conflicts: BatchConflict[] } | null>(null)
+const batchEditBlock = ref<{ batchId: string; conflicts: BatchConflict[] } | null>(null)
+
 const kindOptions = [
   { label: '台词', value: 'dialogue' },
   { label: '音效', value: 'sfx' },
@@ -68,6 +82,14 @@ const rateOptions: Array<{ label: string; value: Rate }> = [
 ]
 const characterOptions = computed(() => state.value.document.characters.map((item) => ({ label: `${item.name} / ${item.voiceActor}`, value: item.id })))
 const effectOptions = computed(() => state.value.document.soundEffects.map((item) => ({ label: `${item.name} (${item.duration}s)`, value: item.id })))
+const batchOptions = computed(() => [
+  { label: '未排期（不进入录制批次）', value: '' },
+  ...state.value.document.batches.map((batch) => ({
+    label: `${batch.name} · ${batch.date || '日期未定'} ${batch.slot || '时段未定'}`,
+    value: batch.id
+  }))
+])
+const slotOptions = ['上午', '下午', '晚间'].map((slot) => ({ label: slot, value: slot }))
 const themeOverrides = {
   common: {
     primaryColor: '#73daca',
@@ -110,6 +132,45 @@ function dropCue(targetId: string) {
 function goToScene(sceneId: string) {
   selectedSceneId.value = sceneId
   document.querySelector('.editor-column')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+function onAssignBatch(sceneId: string, batchId: string) {
+  const conflicts = assignSceneBatch(sceneId, batchId)
+  assignBlock.value = conflicts.length ? { sceneId, conflicts } : null
+}
+
+function onBatchField(batch: RecordingBatch, field: 'name' | 'date' | 'slot', value: string | null) {
+  const next = (value ?? '').trim()
+  if (field !== 'name' && next === '') return
+  const conflicts = updateBatch(batch.id, field, next)
+  batchEditBlock.value = conflicts.length ? { batchId: batch.id, conflicts } : null
+}
+
+function onCreateBatch() {
+  addBatch()
+  activeRightTab.value = 'batches'
+}
+
+function batchScenes(batchId: string) {
+  return state.value.document.scenes.filter((scene) => scene.batchId === batchId)
+}
+
+function batchActorsOf(batchId: string) {
+  return batchActors.value.get(batchId) ?? []
+}
+
+function warningTag(type: string) {
+  if (type === 'collision') return '撞场'
+  if (type === 'missing-sfx') return '引用'
+  if (type === 'schedule') return '排期'
+  return '时长'
+}
+
+function sceneScheduleText(sceneId: string): string {
+  const scene = state.value.document.scenes.find((item) => item.id === sceneId)
+  const batch = scene?.batchId ? state.value.document.batches.find((item) => item.id === scene.batchId) : undefined
+  if (!batch) return '未排期（待归入批次）'
+  return `🎙 ${batch.name} · ${batch.date || '日期未定'} ${batch.slot || ''}`.trim()
 }
 
 function changeCueKind(cue: Cue, kind: CueKind) {
@@ -224,7 +285,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
               <span class="eyebrow">PLAYLIST</span>
               <h2>场次结构</h2>
             </div>
-            <n-button circle secondary aria-label="新增场次" @click="addScene">＋</n-button>
+            <div class="heading-actions">
+              <n-button size="small" secondary title="新建录制批次" @click="onCreateBatch">批</n-button>
+              <n-button circle secondary aria-label="新增场次" @click="addScene">＋</n-button>
+            </div>
           </div>
           <div class="scene-list">
             <button
@@ -238,6 +302,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
               <span class="scene-copy">
                 <strong>{{ scene.code }} · {{ scene.title }}</strong>
                 <small>{{ scene.location }} / {{ scene.timeOfDay }}</small>
+                <small class="scene-schedule" :class="{ unscheduled: !scene.batchId }">{{ sceneScheduleText(scene.id) }}</small>
               </span>
               <span class="scene-duration">{{ durationOfScene(scene).toFixed(0) }}s</span>
             </button>
@@ -271,6 +336,42 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
             <n-form-item label="场次限额（秒）"><n-input-number :value="selectedScene.durationLimit" :min="5" :step="5" @update:value="updateScene(selectedScene.id, 'durationLimit', $event ?? 0)" /></n-form-item>
             <n-form-item label="场次转场" class="span-2"><n-input :value="selectedScene.transition" @update:value="updateScene(selectedScene.id, 'transition', $event)" /></n-form-item>
           </div>
+
+          <div class="schedule-bar">
+            <n-form-item label="录制批次" class="schedule-select">
+              <n-select
+                :value="selectedScene.batchId ?? ''"
+                :options="batchOptions"
+                @update:value="onAssignBatch(selectedScene.id, $event)"
+              />
+            </n-form-item>
+            <n-button size="small" secondary @click="onCreateBatch">＋ 新批次</n-button>
+            <div class="actor-line">
+              <span class="actor-line-label">本场演员（随内容实时重算）</span>
+              <template v-if="sceneActors(selectedScene.id).length">
+                <n-tag v-for="actor in sceneActors(selectedScene.id)" :key="actor" size="small" :bordered="false" type="info">{{ actor }}</n-tag>
+              </template>
+              <span v-else class="actor-empty">暂无台词演员</span>
+            </div>
+          </div>
+
+          <n-alert
+            v-if="assignBlock && assignBlock.sceneId === selectedScene.id"
+            type="error"
+            class="block-alert"
+            :show-icon="true"
+            title="改派被挡住：同一天同一时段演员已在另一批次"
+            closable
+            @close="assignBlock = null"
+          >
+            <div v-for="conflict in assignBlock.conflicts" :key="conflict.otherSceneId + conflict.actor" class="conflict-line">
+              <strong>{{ conflict.actor }}</strong> 同时出现在
+              「{{ sceneLabel(conflict.sceneId) }}」与「{{ sceneLabel(conflict.otherSceneId) }}」，
+              两批同为 {{ state.document.batches.find((item) => item.id === conflict.batchId)?.date }}
+              {{ state.document.batches.find((item) => item.id === conflict.batchId)?.slot }}。
+              原排期和演员名单未改动。
+            </div>
+          </n-alert>
 
           <div class="timeline-heading">
             <div>
@@ -352,13 +453,110 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
               <div class="review-list">
                 <div v-for="warning in warnings" :key="warning.id" class="warning-card" :class="warning.level">
                   <div class="warning-title">
-                    <n-tag size="small" :type="warning.level === 'error' ? 'error' : 'warning'" :bordered="false">{{ warning.type === 'collision' ? '撞场' : warning.type === 'missing-sfx' ? '引用' : '时长' }}</n-tag>
+                    <n-tag size="small" :type="warning.level === 'error' ? 'error' : 'warning'" :bordered="false">{{ warningTag(warning.type) }}</n-tag>
                     <strong>{{ warning.title }}</strong>
                   </div>
                   <p>{{ warning.detail }}</p>
                   <n-button size="tiny" quaternary @click="goToScene(warning.sceneId)">定位到 {{ state.document.scenes.find((scene) => scene.id === warning.sceneId)?.code }}</n-button>
                 </div>
                 <n-empty v-if="!warnings.length" description="当前没有连续性问题" />
+              </div>
+            </n-tab-pane>
+
+            <n-tab-pane name="batches" :tab="`批次 ${state.document.batches.length}`">
+              <div class="pending-toolbar">
+                <n-alert type="info" :show-icon="false">场次归入批次后统一安排日期与时段；到场演员按批次内场次内容实时重算。同一天同一时段演员不能分属两个批次。</n-alert>
+              </div>
+              <div class="review-list">
+                <article v-for="batch in state.document.batches" :key="batch.id" class="batch-card">
+                  <div class="batch-head">
+                    <n-input class="batch-name" :value="batch.name" @update:value="onBatchField(batch, 'name', $event)" />
+                    <n-popconfirm @positive-click="deleteBatch(batch.id)">
+                      <template #trigger>
+                        <n-button size="tiny" tertiary type="error">删除批次</n-button>
+                      </template>
+                      删除后批次内场次全部转为未排期，原场次内容不变。确定删除？
+                    </n-popconfirm>
+                  </div>
+                  <div class="batch-fields">
+                    <n-datePicker
+                      type="date"
+                      size="small"
+                      :value="batch.date ? new Date(batch.date + 'T00:00:00').getTime() : null"
+                      :formatted-value="batch.date ? batch.date : null"
+                      value-format="yyyy-MM-dd"
+                      placeholder="选择日期"
+                      clearable
+                      @update:formatted-value="onBatchField(batch, 'date', $event)"
+                    />
+                    <n-select
+                      size="small"
+                      class="batch-slot"
+                      :value="batch.slot"
+                      :options="slotOptions"
+                      filterable
+                      tag
+                      placeholder="时段"
+                      @update:value="onBatchField(batch, 'slot', $event)"
+                    />
+                  </div>
+                  <n-alert
+                    v-if="batchEditBlock && batchEditBlock.batchId === batch.id"
+                    type="error"
+                    class="block-alert"
+                    :show-icon="true"
+                    title="日期/时段调整被挡住"
+                    closable
+                    @close="batchEditBlock = null"
+                  >
+                    <div v-for="conflict in batchEditBlock.conflicts" :key="conflict.sceneId + conflict.otherSceneId + conflict.actor" class="conflict-line">
+                      「{{ sceneLabel(conflict.sceneId) }}」与「{{ sceneLabel(conflict.otherSceneId) }}」都需要
+                      <strong>{{ conflict.actor }}</strong>，将落在同一天同一时段。原排期和演员名单未改动。
+                    </div>
+                  </n-alert>
+                  <div class="batch-scenes">
+                    <span class="batch-section-label">本场次（{{ batchScenes(batch.id).length }}）</span>
+                    <div v-if="batchScenes(batch.id).length" class="chip-row">
+                      <n-tag
+                        v-for="scene in batchScenes(batch.id)"
+                        :key="scene.id"
+                        size="small"
+                        :bordered="false"
+                        checkable
+                        :checked="scene.id === selectedSceneId"
+                        @update:checked="goToScene(scene.id)"
+                      >{{ scene.code }} {{ scene.title }}</n-tag>
+                    </div>
+                    <span v-else class="actor-empty">暂无场次归入，请在场次编辑区选择该批次。</span>
+                  </div>
+                  <div class="batch-actors">
+                    <span class="batch-section-label">到场演员（{{ batchActorsOf(batch.id).length }}）</span>
+                    <div v-if="batchActorsOf(batch.id).length" class="chip-row">
+                      <n-tag v-for="entry of batchActorsOf(batch.id)" :key="entry.actor" size="small" type="info" :bordered="false">
+                        {{ entry.actor }}<span class="actor-role">（{{ entry.roles.join('、') }}）</span>
+                      </n-tag>
+                    </div>
+                    <span v-else class="actor-empty">批次内场次暂无台词演员。</span>
+                  </div>
+                </article>
+
+                <div class="unscheduled-card">
+                  <div class="batch-section-label">未排期（{{ unscheduledScenes.length }}）</div>
+                  <div v-if="unscheduledScenes.length" class="chip-row">
+                    <n-tag
+                      v-for="scene in unscheduledScenes"
+                      :key="scene.id"
+                      size="small"
+                      :bordered="false"
+                      checkable
+                      :checked="scene.id === selectedSceneId"
+                      @update:checked="goToScene(scene.id)"
+                    >{{ scene.code }} {{ scene.title }}</n-tag>
+                  </div>
+                  <span v-else class="actor-empty">全部场次都已归入批次。</span>
+                </div>
+
+                <n-button block secondary type="primary" @click="onCreateBatch">＋ 新建录制批次</n-button>
               </div>
             </n-tab-pane>
 

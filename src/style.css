@@ -91,6 +91,25 @@ h3 { margin: 3px 0 0; font-size: 21px; }
 .pending-actions { display: flex; gap: 8px; margin-top: 11px; }
 .version-card { align-items: center; }
 .version-card > div { display: grid; gap: 4px; }
+.heading-actions { display: flex; gap: 6px; }
+.scene-schedule { color: #73daca !important; }
+.scene-schedule.unscheduled { color: #9a7b4f !important; }
+.schedule-bar { display: grid; grid-template-columns: minmax(240px, 360px) auto 1fr; gap: 12px; align-items: center; margin-top: 12px; padding: 12px 18px; border: 1px solid rgba(115,218,202,.25); border-radius: 12px; background: rgba(115,218,202,.05); }
+.schedule-select :deep(.n-form-item-blank) { min-height: 0; }
+.actor-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.actor-line-label, .batch-section-label { color: #78859d; font-size: 11px; font-weight: 700; letter-spacing: .05em; }
+.actor-empty { color: #657188; font-size: 11px; }
+.block-alert { margin-top: 10px; }
+.conflict-line { font-size: 12px; line-height: 1.6; }
+.conflict-line + .conflict-line { margin-top: 4px; }
+.batch-card { display: grid; gap: 10px; padding: 13px; border: 1px solid #293346; border-left: 3px solid #73daca; border-radius: 10px; background: #141b28; }
+.batch-head { display: flex; align-items: center; gap: 8px; }
+.batch-name { flex: 1; font-weight: 700; }
+.batch-fields { display: grid; grid-template-columns: 1fr 110px; gap: 8px; }
+.batch-scenes, .batch-actors { display: grid; gap: 7px; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.actor-role { color: #9fb3c8; font-weight: 400; }
+.unscheduled-card { display: grid; gap: 8px; padding: 13px; border: 1px dashed #3a465c; border-radius: 10px; background: rgba(255,199,119,.04); }
 .dialog-card { width: min(460px, calc(100vw - 32px)); padding: 24px; border: 1px solid #2d394d; border-radius: 14px; background: #171e2c; box-shadow: 0 26px 80px rgba(0,0,0,.5); }
 .dialog-card h2 { margin: 7px 0 12px; }
 .dialog-card p { color: #8895aa; font-size: 13px; line-height: 1.6; }
@@ -118,6 +137,7 @@ h3 { margin: 3px 0 0; font-size: 21px; }
   .title-input { width: 100%; font-size: 25px; margin-top: 7px; }
   .scene-order-actions { margin-top: 12px; }
   .scene-meta-grid { grid-template-columns: 1fr 1fr; }
+  .schedule-bar { grid-template-columns: 1fr; }
   .cue-grid { grid-template-columns: 1fr 1fr; }
   .cue-topline { flex-wrap: wrap; }
   .review-column { padding: 18px 14px; }
