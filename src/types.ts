@@ -1,5 +1,6 @@
 export type CueKind = 'dialogue' | 'sfx' | 'transition'
 export type Rate = 0.8 | 0.9 | 1 | 1.1 | 1.2
+export type TimeSlot = 'morning' | 'afternoon' | 'evening'
 
 export interface Character {
   id: string
@@ -37,6 +38,14 @@ export interface Scene {
   transition: string
   durationLimit: number
   cues: Cue[]
+  batchId?: string
+}
+
+export interface RecordingBatch {
+  id: string
+  date: string
+  slot: TimeSlot
+  note: string
 }
 
 export interface StudioDocument {
@@ -46,6 +55,7 @@ export interface StudioDocument {
   characters: Character[]
   soundEffects: SoundEffect[]
   scenes: Scene[]
+  batches: RecordingBatch[]
 }
 
 export interface PendingChange {
@@ -73,12 +83,22 @@ export interface StudioState {
   updatedAt: string
 }
 
+export type WarningType = 'collision' | 'missing-sfx' | 'over-time' | 'double-book'
+
 export interface WarningItem {
   id: string
-  type: 'collision' | 'missing-sfx' | 'over-time'
+  type: WarningType
   level: 'error' | 'warning'
   sceneId: string
   cueId?: string
   title: string
   detail: string
+}
+
+export interface BatchAssignmentConflict {
+  batchId: string
+  actors: Array<{
+    actor: string
+    sceneIds: string[]
+  }>
 }

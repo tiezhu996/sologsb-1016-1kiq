@@ -1,17 +1,36 @@
 import { computed, ref, watch } from 'vue'
 import { sampleDocument } from './sample'
-import type { Cue, CueKind, FrozenVersion, PendingChange, Scene, StudioDocument, StudioState, WarningItem } from './types'
+import type { Cue, CueKind, FrozenVersion, PendingChange, RecordingBatch, Scene, StudioDocument, StudioState, TimeSlot, WarningItem } from './types'
 
 const STORAGE_KEY = 'sologsb-1016-studio-v1'
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+
+export const SLOT_LABELS: Record<TimeSlot, string> = {
+  morning: '上午',
+  afternoon: '下午',
+  evening: '晚间'
+}
+
+export function slotLabel(slot: string): string {
+  return SLOT_LABELS[slot as TimeSlot] ?? slot
+}
 
 function loadState(): StudioState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw) as StudioState
-      if (parsed.document?.scenes?.length) return parsed
+      if (parsed.document?.scenes?.length) {
+        // 旧版本数据没有批次表：按未排期打开，不改动原有场次与演员内容。
+        if (!Array.isArray(parsed.document.batches)) parsed.document.batches = []
+        for (const scene of parsed.document.scenes) {
+          if (scene.batchId && !parsed.document.batches.some((batch) => batch.id === scene.batchId)) {
+            scene.batchId = undefined
+          }
+        }
+        return parsed
+      }
     }
   } catch {
     // A corrupt local draft should not prevent access to the built-in example.
@@ -52,6 +71,103 @@ export function useStudio() {
 
   const totalDuration = computed(() => state.value.document.scenes.reduce((total, scene) => total + durationOfScene(scene), 0))
   const pendingChanges = computed(() => state.value.pending.filter((item) => item.status === 'pending'))
+
+  function actorsInScene(document: StudioDocument, scene: Scene): string[] {
+    const actors = new Set<string>()
+    for (const cue of scene.cues) {
+      if (cue.kind !== 'dialogue' || !cue.characterId) continue
+      const character = document.characters.find((item) => item.id === cue.characterId)
+      if (character?.voiceActor) actors.add(character.voiceActor)
+    }
+    return [...actors]
+  }
+
+  // 到场演员完全由批次内场次的台词实时派生，不单独保存，场次内容一变即重算。
+  const batchActorsMap = computed<Map<string, string[]>>(() => {
+    const map = new Map<string, Set<string>>()
+    for (const scene of state.value.document.scenes) {
+      if (!scene.batchId) continue
+      const set = map.get(scene.batchId) ?? new Set<string>()
+      for (const actor of actorsInScene(state.value.document, scene)) set.add(actor)
+      map.set(scene.batchId, set)
+    }
+    return new Map([...map].
+      map(([batchId, set]) => [batchId, [...set].sort((a, b) => a.localeCompare(b, 'zh-CN'))] as const))
+  })
+
+  const scenesByBatch = computed<Map<string, Scene[]>>(() => {
+    const map = new Map<string, Scene[]>()
+    for (const scene of state.value.document.scenes) {
+      if (!scene.batchId) continue
+      const list = map.get(scene.batchId) ?? []
+      list.push(scene)
+      map.set(scene.batchId, list)
+    }
+    return map
+  })
+
+  function actorsForBatch(batchId: string): string[] {
+    return batchActorsMap.value.get(batchId) ?? []
+  }
+
+  function scenesForBatch(batchId: string): Scene[] {
+    return scenesByBatch.value.get(batchId) ?? []
+  }
+
+  const batchById = (batchId: string) => state.value.document.batches.find((batch) => batch.id === batchId)
+
+  function batchLabelOf(batchId?: string): string {
+    if (!batchId) return '未排期'
+    const batch = batchById(batchId)
+    if (!batch) return '未排期'
+    return `${batch.date} ${slotLabel(batch.slot)}`
+  }
+
+  interface DoubleBooking {
+    key: string
+    date: string
+    slot: TimeSlot
+    actor: string
+    batchIds: string[]
+    sceneIds: string[]
+  }
+
+  // 同一天同一时段内，同一配音演员出现在两个批次即构成撞档；可传入覆盖项模拟改派/改时段后的局面。
+  function collectDoubleBookings(
+    document: StudioDocument,
+    override?: { sceneId?: string; batchId?: string; batch?: RecordingBatch }
+  ): DoubleBooking[] {
+    const groups = new Map<string, { actor: string; date: string; slot: TimeSlot; batches: Map<string, string[]> }>()
+    for (const scene of document.scenes) {
+      let batchId = scene.batchId
+      if (override?.sceneId === scene.id) batchId = override.batchId
+      if (!batchId) continue
+      const batch = override?.batch && override.batch.id === batchId ? override.batch : document.batches.find((item) => item.id === batchId)
+      if (!batch) continue
+      for (const actor of actorsInScene(document, scene)) {
+        const key = `${batch.date}|${batch.slot}|${actor}`
+        const group = groups.get(key) ?? { actor, date: batch.date, slot: batch.slot, batches: new Map<string, string[]>() }
+        const scenes = group.batches.get(batchId) ?? []
+        if (!scenes.includes(scene.id)) scenes.push(scene.id)
+        group.batches.set(batchId, scenes)
+        groups.set(key, group)
+      }
+    }
+    const result: DoubleBooking[] = []
+    groups.forEach((group, key) => {
+      if (group.batches.size < 2) return
+      const batchIds = [...group.batches.keys()]
+      result.push({
+        key,
+        date: group.date,
+        slot: group.slot,
+        actor: group.actor,
+        batchIds,
+        sceneIds: batchIds.flatMap((id) => group.batches.get(id) ?? [])
+      })
+    })
+    return result
+  }
 
   const warnings = computed<WarningItem[]>(() => {
     const result: WarningItem[] = []
@@ -100,6 +216,21 @@ export function useStudio() {
           sceneId: scene.id,
           title: `${scene.code} 超出场次限额`,
           detail: `预计 ${sceneDuration.toFixed(1)} 秒，限额 ${scene.durationLimit} 秒，超出 ${(sceneDuration - scene.durationLimit).toFixed(1)} 秒。`
+        })
+      }
+    }
+    const sceneCode = (sceneId: string) => state.value.document.scenes.find((scene) => scene.id === sceneId)?.code ?? '?'
+    for (const conflict of collectDoubleBookings(state.value.document)) {
+      const sceneCodes = conflict.sceneIds.map(sceneCode)
+      const detail = `${conflict.date} ${slotLabel(conflict.slot)}，配音演员“${conflict.actor}”同时被排进 ${conflict.batchIds.length} 个批次：场次 ${sceneCodes.join('、')}。请调整其中一场的批次或日期时段。`
+      for (const sceneId of conflict.sceneIds) {
+        result.push({
+          id: `doublebook-${conflict.key}-${sceneId}`,
+          type: 'double-book',
+          level: 'error',
+          sceneId,
+          title: `${sceneCode(sceneId)} 录制撞档 · ${conflict.actor}`,
+          detail
         })
       }
     }
@@ -258,6 +389,76 @@ export function useStudio() {
     })
   }
 
+  const unscheduledScenes = computed(() => state.value.document.scenes.filter((scene) => !scene.batchId || !batchById(scene.batchId)))
+
+  function formatConflictList(conflicts: DoubleBooking[]): string {
+    const sceneCode = (sceneId: string) => state.value.document.scenes.find((scene) => scene.id === sceneId)?.code ?? '?'
+    return conflicts
+      .map((conflict) => `${conflict.date} ${slotLabel(conflict.slot)} “${conflict.actor}”：场次 ${conflict.sceneIds.map(sceneCode).join('、')}`)
+      .join('；')
+  }
+
+  // 场次改派：撞档时点名两个场次并挡住，原排期与演员名单均不变。
+  function assignSceneBatch(sceneId: string, batchId: string | undefined): { ok: boolean; conflicts: DoubleBooking[] } {
+    const scene = state.value.document.scenes.find((item) => item.id === sceneId)
+    if (!scene) return { ok: false, conflicts: [] }
+    const currentId = scene.batchId && batchById(scene.batchId) ? scene.batchId : undefined
+    if ((batchId ?? undefined) === currentId) return { ok: true, conflicts: [] }
+    if (batchId && !batchById(batchId)) return { ok: false, conflicts: [] }
+    const conflicts = collectDoubleBookings(state.value.document, { sceneId, batchId })
+    if (conflicts.length) return { ok: false, conflicts }
+    const targetCode = batchId ? batchLabelOf(batchId) : '未排期'
+    commit(`改派 ${scene.code} 至 ${targetCode}`, (document) => {
+      const target = document.scenes.find((item) => item.id === sceneId)
+      if (!target) return
+      target.batchId = batchId
+    })
+    return { ok: true, conflicts: [] }
+  }
+
+  function addBatch(date: string, slot: TimeSlot, note: string): string {
+    const id = uid('batch')
+    const count = state.value.document.batches.length + 1
+    commit(`新增录制批次 ${count}`, (document) => {
+      document.batches.push({ id, date, slot, note: note.trim() })
+    })
+    return id
+  }
+
+  // 修改批次日期/时段：撞档时挡住，原日期时段不变。
+  function updateBatch(batchId: string, patch: { date?: string; slot?: TimeSlot; note?: string }): { ok: boolean; conflicts: DoubleBooking[] } {
+    const batch = batchById(batchId)
+    if (!batch) return { ok: false, conflicts: [] }
+    const nextDate = patch.date ?? batch.date
+    const nextSlot = patch.slot ?? batch.slot
+    if (nextDate === batch.date && nextSlot === batch.slot && (patch.note ?? batch.note) === batch.note) {
+      return { ok: true, conflicts: [] }
+    }
+    if (nextDate !== batch.date || nextSlot !== batch.slot) {
+      const conflicts = collectDoubleBookings(state.value.document, { batch: { ...batch, date: nextDate, slot: nextSlot } })
+      if (conflicts.length) return { ok: false, conflicts }
+    }
+    commit(`修改批次 ${nextDate} ${slotLabel(nextSlot)}`, (document) => {
+      const target = document.batches.find((item) => item.id === batchId)
+      if (!target) return
+      target.date = nextDate
+      target.slot = nextSlot
+      if (patch.note !== undefined) target.note = patch.note
+    })
+    return { ok: true, conflicts: [] }
+  }
+
+  function deleteBatch(batchId: string) {
+    const batch = batchById(batchId)
+    if (!batch) return
+    commit(`删除批次 ${batch.date} ${slotLabel(batch.slot)}`, (document) => {
+      document.batches = document.batches.filter((item) => item.id !== batchId)
+      for (const scene of document.scenes) {
+        if (scene.batchId === batchId) scene.batchId = undefined
+      }
+    })
+  }
+
   function acceptChange(changeId: string) {
     const change = state.value.pending.find((item) => item.id === changeId)
     if (!change || change.status !== 'pending') return
@@ -319,8 +520,39 @@ export function useStudio() {
       '='.repeat(48),
       ''
     ]
+
+    const findBatch = (batchId?: string) => (batchId ? document.batches.find((batch) => batch.id === batchId) : undefined)
+    const scheduled = document.scenes.filter((scene) => findBatch(scene.batchId))
+    if (scheduled.length) {
+      lines.push('录制排期')
+      const ordered = [...document.batches].sort((a, b) => a.date.localeCompare(b.date) || a.slot.localeCompare(b.slot))
+      for (const batch of ordered) {
+        const scenes = document.scenes.filter((scene) => scene.batchId === batch.id)
+        if (!scenes.length) continue
+        const actors = new Set<string>()
+        for (const scene of scenes) for (const actor of actorsInScene(document, scene)) actors.add(actor)
+        lines.push(`${batch.date} ${slotLabel(batch.slot)}${batch.note ? `｜${batch.note}` : ''}`)
+        lines.push(`  场次：${scenes.map((scene) => scene.code).join('、') || '无'}`)
+        lines.push(`  到场演员：${[...actors].join('、') || '暂无台词角色'}`)
+      }
+      const unscheduled = document.scenes.filter((scene) => !findBatch(scene.batchId))
+      if (unscheduled.length) lines.push(`未排期场次：${unscheduled.map((scene) => scene.code).join('、')}`)
+      lines.push('='.repeat(48))
+      lines.push('')
+    } else {
+      lines.push('录制排期：全部场次未排期')
+      lines.push('='.repeat(48))
+      lines.push('')
+    }
+
     document.scenes.forEach((scene, sceneIndex) => {
       lines.push(`${scene.code}｜${scene.title}`)
+      const batch = findBatch(scene.batchId)
+      if (batch) {
+        lines.push(`录制批次：${batch.date} ${slotLabel(batch.slot)}${batch.note ? `｜${batch.note}` : ''}`)
+      } else {
+        lines.push('录制批次：未排期')
+      }
       lines.push(`场景：${scene.location} / ${scene.timeOfDay}`)
       lines.push(`转场：${scene.transition}`)
       lines.push(`场次限额：${scene.durationLimit} 秒｜预计：${durationOfScene(scene)} 秒`)
@@ -384,6 +616,16 @@ export function useStudio() {
     deleteCue,
     moveCue,
     moveScene,
+    assignSceneBatch,
+    addBatch,
+    updateBatch,
+    deleteBatch,
+    formatConflictList,
+    actorsForBatch,
+    scenesForBatch,
+    actorsInScene: (scene: Scene) => actorsInScene(state.value.document, scene),
+    unscheduledScenes,
+    batchLabelOf,
     acceptChange,
     rejectChange,
     acceptAll,
